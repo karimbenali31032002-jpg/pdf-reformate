@@ -2,8 +2,20 @@ import express from "express";
 import { createServer as createViteServer } from "vite";
 import path from "path";
 import fileUpload from "express-fileupload";
-import pdf from "pdf-parse";
-import { GoogleGenAI } from "@google/genai";
+import { createRequire } from "module";
+
+const require = createRequire(import.meta.url);
+const pdf = require("pdf-parse");
+
+// Import ultra-robuste pour @google/genai
+let GoogleGenerativeAI;
+try {
+  const genaiModule = require("@google/genai");
+  GoogleGenerativeAI = genaiModule.GoogleGenerativeAI;
+} catch (e) {
+  console.error("Erreur d'importation @google/genai:", e);
+}
+
 import { 
   Document, 
   Packer, 
@@ -13,17 +25,24 @@ import {
   AlignmentType, 
   BorderStyle, 
   ShadingType,
-  Table,
-  TableRow,
-  TableCell,
-  WidthType,
   TableOfContents
 } from "docx";
 
 // --- CONFIG ---
 const PORT = 3000;
-const genAI = new GoogleGenAI(process.env.GEMINI_API_KEY || "");
-const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+
+// On initialise l'IA de manière paresseuse pour éviter de planter si la clé est manquante au départ
+let genAI: GoogleGenerativeAI | null = null;
+function getModel() {
+  if (!genAI) {
+    const key = process.env.GEMINI_API_KEY;
+    if (!key) {
+      throw new Error("GEMINI_API_KEY non configurée dans .env.local");
+    }
+    genAI = new GoogleGenerativeAI(key);
+  }
+  return genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+}
 
 // --- COLORS FROM SKILL ---
 const COLORS = {
@@ -62,7 +81,6 @@ async function analyzeTextWithGemini(text: string) {
           "content": [
             { "type": "paragraph", "text": "Le texte..." },
             { "type": "list", "items": ["Item 1", "Item 2"] },
-            { "type": "table", "headers": ["Col1", "Col2"], "rows": [["R1C1", "R1C2"]] },
             { "type": "important", "text": "À retenir..." },
             { "type": "alert", "text": "Attention..." }
           ]
@@ -78,6 +96,7 @@ async function analyzeTextWithGemini(text: string) {
     - Réponds UNIQUEMENT avec le JSON.
   `;
 
+  const model = getModel();
   const result = await model.generateContent(prompt);
   const responseText = result.response.text();
   const jsonMatch = responseText.match(/\{[\s\S]*\}/);
@@ -102,7 +121,6 @@ function createRichParagraph(segments: any[]) {
 
 function enrichText(text: string, keyTerms: string[]) {
   // Simple regex-based highlighting for key terms
-  // In a real app, this would be more sophisticated
   let segments = [{ text: text, bold: false, color: COLORS.text }];
   
   for (const term of keyTerms) {
