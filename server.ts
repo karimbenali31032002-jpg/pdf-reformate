@@ -1,4 +1,5 @@
 import express from "express";
+import "dotenv/config";
 import { createServer as createViteServer } from "vite";
 import path from "path";
 import fileUpload from "express-fileupload";
@@ -158,11 +159,38 @@ async function startServer() {
       }
 
       const uploadedFile = req.files.file as any;
-      const pdfData = await pdf(uploadedFile.data);
-      const rawText = pdfData.text;
+      console.log("File received:", uploadedFile.name, uploadedFile.size, "bytes");
+
+      if (typeof pdf !== "function") {
+        console.error("pdf-parse is not a function. Check imports.");
+        return res.status(500).json({ error: "Configuration Error: pdf-parse is not correctly imported" });
+      }
+
+      let pdfData;
+      try {
+        pdfData = await pdf(uploadedFile.data);
+      } catch (pdfErr) {
+        console.error("PDF Parsing failed:", pdfErr);
+        return res.status(500).json({ error: "PDF Parsing failed: " + (pdfErr instanceof Error ? pdfErr.message : String(pdfErr)) });
+      }
+
+      const rawText = pdfData?.text || "";
+      console.log("Raw text extracted, length:", rawText.length);
+
+      if (!rawText.trim()) {
+        return res.status(400).json({ error: "The PDF seems to be empty or contains no extractable text." });
+      }
 
       // AI Analysis
-      const structuredCourse = await analyzeTextWithGemini(rawText);
+      let structuredCourse;
+      try {
+        console.log("Starting AI Analysis...");
+        structuredCourse = await analyzeTextWithGemini(rawText);
+        console.log("AI Analysis succeeded");
+      } catch (aiError) {
+        console.error("AI Analysis Failed:", aiError);
+        return res.status(500).json({ error: "AI Analysis failed: " + (aiError instanceof Error ? aiError.message : String(aiError)) });
+      }
 
       // Docx Generation
       const doc = new Document({
@@ -171,13 +199,13 @@ async function startServer() {
           children: [
             // Page de garde
             new Paragraph({
-              text: structuredCourse.title || "Cours sans titre",
+              text: (structuredCourse?.title || "Cours").trim(),
               heading: HeadingLevel.TITLE,
               alignment: AlignmentType.CENTER,
               spacing: { before: 2400, after: 600 },
             }),
             new Paragraph({
-              text: structuredCourse.matter || "",
+              text: (structuredCourse?.matter || "").trim(),
               alignment: AlignmentType.CENTER,
               spacing: { after: 2400 },
             }),
@@ -190,7 +218,7 @@ async function startServer() {
 
             // Objectifs
             new Paragraph({ text: "Objectifs Pédagogiques", heading: HeadingLevel.HEADING_1, pageBreakBefore: true }),
-            ...structuredCourse.objectives.map((obj: string) => 
+            ...(structuredCourse?.objectives || []).map((obj: string) => 
                new Paragraph({
                  text: obj,
                  bullet: { level: 0 },
@@ -199,21 +227,21 @@ async function startServer() {
             ),
 
             // Sections
-            ...structuredCourse.sections.flatMap((section: any) => {
+            ...(structuredCourse?.sections || []).flatMap((section: any) => {
               const nodes = [];
               const heading = section.level === 1 ? HeadingLevel.HEADING_1 : (section.level === 2 ? HeadingLevel.HEADING_2 : HeadingLevel.HEADING_3);
               
               nodes.push(new Paragraph({
-                text: section.title,
+                text: section.title || "Sans titre",
                 heading: heading,
                 spacing: { before: 400, after: 200 },
               }));
 
-              section.content.forEach((item: any) => {
+              (section.content || []).forEach((item: any) => {
                 if (item.type === "paragraph") {
-                  nodes.push(createRichParagraph(enrichText(item.text, structuredCourse.keyTerms)));
+                  nodes.push(createRichParagraph(enrichText(item.text || "", structuredCourse?.keyTerms || [])));
                 } else if (item.type === "list") {
-                  item.items.forEach((listItem: string) => {
+                  (item.items || []).forEach((listItem: string) => {
                     nodes.push(new Paragraph({
                       text: listItem,
                       bullet: { level: 0 },
@@ -226,7 +254,7 @@ async function startServer() {
                     shading: { fill: COLORS.accent, type: ShadingType.CLEAR },
                     children: [
                       new TextRun({ text: "À retenir — ", bold: true, font: "Arial", size: 22, color: COLORS.primary }),
-                      new TextRun({ text: item.text, font: "Arial", size: 22, color: COLORS.primary }),
+                      new TextRun({ text: item.text || "", font: "Arial", size: 22, color: COLORS.primary }),
                     ],
                   }));
                 } else if (item.type === "alert") {
@@ -236,7 +264,7 @@ async function startServer() {
                     shading: { fill: COLORS.warning, type: ShadingType.CLEAR },
                     children: [
                       new TextRun({ text: "⚠  ", bold: true, font: "Arial", size: 22, color: COLORS.warningBorder }),
-                      new TextRun({ text: item.text, bold: true, font: "Arial", size: 22, color: "B7490A" }),
+                      new TextRun({ text: item.text || "", bold: true, font: "Arial", size: 22, color: "B7490A" }),
                     ],
                   }));
                 }
@@ -254,8 +282,8 @@ async function startServer() {
       res.send(buffer);
 
     } catch (error) {
-      console.error("Error processing PDF:", error);
-      res.status(500).json({ error: "Internal Server Error" });
+      console.error("Critical Error in /api/reformat:", error);
+      res.status(500).json({ error: error instanceof Error ? error.message : "Internal Server Error" });
     }
   });
 
