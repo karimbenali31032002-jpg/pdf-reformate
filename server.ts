@@ -6,13 +6,14 @@ import fileUpload from "express-fileupload";
 import { createRequire } from "module";
 
 const require = createRequire(import.meta.url);
-const pdf = require("pdf-parse");
+const pdfRaw = require("pdf-parse");
+const pdf = typeof pdfRaw === "function" ? pdfRaw : pdfRaw.default;
 
 // Import ultra-robuste pour @google/genai
-let GoogleGenerativeAI;
+let GoogleGenerativeAIClass: any;
 try {
   const genaiModule = require("@google/genai");
-  GoogleGenerativeAI = genaiModule.GoogleGenerativeAI;
+  GoogleGenerativeAIClass = genaiModule.GoogleGenerativeAI || (genaiModule.default && genaiModule.default.GoogleGenerativeAI);
 } catch (e) {
   console.error("Erreur d'importation @google/genai:", e);
 }
@@ -33,16 +34,19 @@ import {
 const PORT = 3000;
 
 // On initialise l'IA de manière paresseuse pour éviter de planter si la clé est manquante au départ
-let genAI: GoogleGenerativeAI | null = null;
+let genAIInstance: any = null;
 function getModel() {
-  if (!genAI) {
+  if (!genAIInstance) {
     const key = process.env.GEMINI_API_KEY;
     if (!key) {
-      throw new Error("GEMINI_API_KEY non configurée dans .env.local");
+      throw new Error("GEMINI_API_KEY non configurée. Ajoute-la dans les paramètres de AI Studio.");
     }
-    genAI = new GoogleGenerativeAI(key);
+    if (!GoogleGenerativeAIClass) {
+      throw new Error("La bibliothèque @google/genai n'a pas pu être chargée.");
+    }
+    genAIInstance = new GoogleGenerativeAIClass(key);
   }
-  return genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+  return genAIInstance.getGenerativeModel({ model: "gemini-2.0-flash" });
 }
 
 // --- COLORS FROM SKILL ---
